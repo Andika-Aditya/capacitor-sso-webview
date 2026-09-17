@@ -134,11 +134,10 @@ public class SSOWebView {
                 final String finalCode  = code  != null ? code  : "";
                 final String finalState = state != null ? state : "";
 
-                /* Baca body JSON via evaluateJavascript — tidak fetch ulang */
+                /* Baca body JSON via evaluateJavascript — membawa cookies session ✅ */
                 view.evaluateJavascript(
                     "(function(){ return document.body ? document.body.innerText : ''; })()",
                     value -> {
-                        /* Unescape JS string result */
                         String body = value;
                         if (body != null) {
                             if (body.startsWith("\"") && body.endsWith("\"")) {
