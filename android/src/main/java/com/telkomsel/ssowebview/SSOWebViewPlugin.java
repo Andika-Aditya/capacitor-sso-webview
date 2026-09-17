@@ -33,10 +33,10 @@ public class SSOWebViewPlugin extends Plugin {
                     title,
                     new SSOWebView.Listener() {
                         @Override
-                        public void onRedirectIntercepted(String u, String code, String state) {
+                        public void onRedirectIntercepted(String u, String code, String state, String body) {
                             JSObject ret = new JSObject();
-                            ret.put("url", u);
-                            ret.put("code", code);
+                            ret.put("url",   u);
+                            ret.put("code",  code);
                             ret.put("state", state);
                             ret.put("body",  body);
                             notifyListeners("ssoRedirect", ret);
