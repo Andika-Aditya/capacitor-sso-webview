@@ -17,20 +17,20 @@ import android.widget.TextView;
 public class SSOWebView {
 
     public interface Listener {
-        void onRedirectIntercepted(String url, String code, String state);
+        void onRedirectIntercepted(String url, String code, String state, String body);
         void onCancelled();
     }
 
-    private Dialog dialog;
+    private Dialog  dialog;
     private WebView webView;
     private boolean alreadyRedirected = false;
 
     public void open(
         final Activity activity,
-        final String url,
-        final String redirectHost,
-        final String redirectPathContains,
-        final String title,
+        final String   url,
+        final String   redirectHost,
+        final String   redirectPathContains,
+        final String   title,
         final Listener listener
     ) {
         alreadyRedirected = false;
@@ -93,9 +93,10 @@ public class SSOWebView {
         cm.setAcceptThirdPartyCookies(webView, true);
 
         webView.setWebViewClient(new WebViewClient() {
+
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri u = request.getUrl();
+                Uri    u    = request.getUrl();
                 String host = u.getHost();
                 String path = u.getPath();
 
@@ -106,22 +107,68 @@ public class SSOWebView {
 
                 if (isRedirect && !alreadyRedirected) {
                     alreadyRedirected = true;
-
-                    String code  = u.getQueryParameter("code");
-                    String state = u.getQueryParameter("state");
-
-                    dismiss();
-
-                    if (listener != null) {
-                        listener.onRedirectIntercepted(
-                            u.toString(),
-                            code  != null ? code  : "",
-                            state != null ? state : ""
-                        );
-                    }
-                    return true;   /* BLOKIR navigasi — code TIDAK dikonsumsi */
+                    /* Biarkan WebView navigate — server akan return JSON body */
+                    return false;
                 }
                 return false;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String pageUrl) {
+                super.onPageFinished(view, pageUrl);
+
+                Uri    u    = Uri.parse(pageUrl);
+                String host = u.getHost();
+                String path = u.getPath();
+
+                boolean isRedirectPage =
+                    host != null && host.equalsIgnoreCase(redirectHost) &&
+                    path != null && path.toLowerCase()
+                        .contains(redirectPathContains.toLowerCase());
+
+                if (!isRedirectPage) return;
+
+                String code  = u.getQueryParameter("code");
+                String state = u.getQueryParameter("state");
+                final String finalUrl   = pageUrl;
+                final String finalCode  = code  != null ? code  : "";
+                final String finalState = state != null ? state : "";
+
+                /* Baca body JSON via evaluateJavascript — tidak fetch ulang */
+                view.evaluateJavascript(
+                    "(function(){ return document.body ? document.body.innerText : ''; })()",
+                    value -> {
+                        /* Unescape JS string result */
+                        String body = value;
+                        if (body != null) {
+                            if (body.startsWith("\"") && body.endsWith("\"")) {
+                                body = body.substring(1, body.length() - 1);
+                            }
+                            body = body.replace("\\\"", "\"")
+                                       .replace("\\n",  "\n")
+                                       .replace("\\r",  "")
+                                       .replace("\\/",  "/");
+                        }
+
+                        final String finalBody = body != null ? body : "";
+                        android.util.Log.d("SSOWebView",
+                            "body len=" + finalBody.length() +
+                            " preview=" + finalBody.substring(0, Math.min(120, finalBody.length())));
+
+                        /* Tutup dialog setelah body dibaca */
+                        activity.runOnUiThread(this::dismiss);
+
+                        if (listener != null) {
+                            listener.onRedirectIntercepted(
+                                finalUrl, finalCode, finalState, finalBody
+                            );
+                        }
+                    }
+                );
+            }
+
+            private void dismiss() {
+                SSOWebView.this.dismiss();
             }
         });
 

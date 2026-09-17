@@ -38,6 +38,7 @@ public class SSOWebViewPlugin extends Plugin {
                             ret.put("url", u);
                             ret.put("code", code);
                             ret.put("state", state);
+                            ret.put("body",  body);
                             notifyListeners("ssoRedirect", ret);
                         }
 
