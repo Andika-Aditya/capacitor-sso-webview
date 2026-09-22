@@ -25,6 +25,7 @@ public class SSOWebView {
   private Dialog dialog;
   private WebView webView;
   private boolean alreadyRedirected = false;
+  private boolean bodyRead = false;
 
   public void open(
     final Activity activity,
@@ -34,6 +35,7 @@ public class SSOWebView {
     final String title,
     final Listener listener) {
     alreadyRedirected = false;
+    bodyRead = false;
 
     dialog = new Dialog(activity, android.R.style.Theme_Light_NoTitleBar_Fullscreen);
 
@@ -111,65 +113,69 @@ public class SSOWebView {
 
       @Override
       public void onPageFinished(WebView view, String pageUrl) {
-        super.onPageFinished(view, pageUrl);
+          super.onPageFinished(view, pageUrl);
 
-        Uri u = Uri.parse(pageUrl);
-        String host = u.getHost();
-        String path = u.getPath();
+          /* Guard: hanya proses sekali setelah redirect */
+          if (bodyRead) return;
 
-        boolean isRedirectPage = host != null && host.equalsIgnoreCase(redirectHost) &&
-          path != null && path.toLowerCase()
-          .contains(redirectPathContains.toLowerCase());
+          Uri    u    = Uri.parse(pageUrl);
+          String host = u.getHost();
+          String path = u.getPath();
 
-        if (!isRedirectPage)
-          return;
+          boolean isRedirectPage =
+              host != null && host.equalsIgnoreCase(redirectHost) &&
+              path != null && path.toLowerCase()
+                  .contains(redirectPathContains.toLowerCase());
 
-        final String finalUrl = pageUrl;
-        final String finalCode = u.getQueryParameter("code") != null ?
-          u.getQueryParameter("code") :
-          "";
-        final String finalState = u.getQueryParameter("state") != null ?
-          u.getQueryParameter("state") :
-          "";
+          if (!isRedirectPage) return;
 
-        /* Delay 150ms — beri waktu body JSON ter-render ke DOM */
-        view.postDelayed(new Runnable() {
-          @Override
-          public void run() {
-            if (webView == null) return;
-            webView.evaluateJavascript(
-              "(function(){" +
-              "  var t = document.body" +
-              "    ? (document.body.innerText || document.body.textContent || '')" +
-              "    : '';" +
-              "  return t.trim();" +
-              "})()",
-              value -> {
-                String body = value;
-                if (body != null) {
-                  if (body.startsWith("\"") && body.endsWith("\""))
-                    body = body.substring(1, body.length() - 1);
-                  body = body.replace("\\\"", "\"")
-                    .replace("\\n", "\n")
-                    .replace("\\r", "")
-                    .replace("\\/", "/");
-                }
-                final String finalBody = (body != null) ? body : "";
-                android.util.Log.d("SSOWebView",
-                  "body len=" + finalBody.length() +
-                  " preview=" + finalBody.substring(
-                    0, Math.min(120, finalBody.length())));
+          /* Set flag SEGERA — cegah double-fire */
+          bodyRead = true;
 
-                /* FIX: gunakan outer class reference */
-                activity.runOnUiThread(() -> SSOWebView.this.dismiss());
+          final String finalUrl   = pageUrl;
+          final String finalCode  = u.getQueryParameter("code")  != null
+                                    ? u.getQueryParameter("code")  : "";
+          final String finalState = u.getQueryParameter("state") != null
+                                    ? u.getQueryParameter("state") : "";
 
-                if (listener != null)
-                  listener.onRedirectIntercepted(
-                    finalUrl, finalCode, finalState, finalBody);
+          /* Delay 150ms — beri waktu body JSON ter-render ke DOM */
+          view.postDelayed(new Runnable() {
+              @Override
+              public void run() {
+                  if (webView == null) return;
+                  webView.evaluateJavascript(
+                      "(function(){" +
+                      "  var t = document.body" +
+                      "    ? (document.body.innerText || document.body.textContent || '')" +
+                      "    : '';" +
+                      "  return t.trim();" +
+                      "})()",
+                      value -> {
+                          String body = value;
+                          if (body != null) {
+                              if (body.startsWith("\"") && body.endsWith("\""))
+                                  body = body.substring(1, body.length() - 1);
+                              body = body.replace("\\\"", "\"")
+                                        .replace("\\n",  "\n")
+                                        .replace("\\r",  "")
+                                        .replace("\\/",  "/");
+                          }
+
+                          final String finalBody = (body != null) ? body : "";
+                          android.util.Log.d("SSOWebView",
+                              "body len=" + finalBody.length() +
+                              " preview=" + finalBody.substring(
+                                  0, Math.min(120, finalBody.length())));
+
+                          activity.runOnUiThread(() -> SSOWebView.this.dismiss());
+
+                          if (listener != null)
+                              listener.onRedirectIntercepted(
+                                  finalUrl, finalCode, finalState, finalBody);
+                      }
+                  );
               }
-            );
-          }
-        }, 150);
+          }, 150);
       }
 
       private void dismiss() {
