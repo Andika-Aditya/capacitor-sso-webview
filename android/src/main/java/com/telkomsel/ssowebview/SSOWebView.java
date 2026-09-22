@@ -57,8 +57,7 @@ public class SSOWebView {
     tvTitle.setText(title != null ? title : "Login");
     tvTitle.setTextColor(Color.WHITE);
     tvTitle.setTextSize(16);
-    tvTitle.setLayoutParams(new LinearLayout.LayoutParams(
-      0, ViewGroup.LayoutParams.WRAP_CONTENT, 1 f));
+    tvTitle.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
     TextView btnClose = new TextView(activity);
     btnClose.setText("Tutup");
@@ -178,8 +177,7 @@ public class SSOWebView {
       }
     });
 
-    webView.setLayoutParams(new LinearLayout.LayoutParams(
-      ViewGroup.LayoutParams.MATCH_PARENT, 0, 1 f));
+    webView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
     root.addView(header);
     root.addView(webView);
