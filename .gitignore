@@ -20,7 +20,7 @@ DerivedData/
 # macOS files
 .DS_Store
 
-
+capacitor-sso-webview.code-workspace
 
 # Based on Android gitignore template: https://github.com/github/gitignore/blob/HEAD/Android.gitignore
 
