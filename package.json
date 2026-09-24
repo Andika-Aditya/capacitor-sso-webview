@@ -1,6 +1,6 @@
 {
   "name": "capacitor-sso-webview",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "SSO WebView with URL intercept",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",

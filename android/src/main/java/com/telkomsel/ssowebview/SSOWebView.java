@@ -4,6 +4,9 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -14,7 +17,22 @@ import android.webkit.WebViewClient;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 public class SSOWebView {
+
+  private static final String TAG = "SSOWebView";
+
+  /* Single background thread — cukup untuk satu exchange per login attempt */
+  private static final ExecutorService EXECUTOR = Executors.newSingleThreadExecutor();
 
   public interface Listener {
     void onRedirectIntercepted(String url, String code, String state, String body);
@@ -25,7 +43,6 @@ public class SSOWebView {
   private Dialog dialog;
   private WebView webView;
   private boolean alreadyRedirected = false;
-  private boolean bodyRead = false;
 
   public void open(
     final Activity activity,
@@ -35,7 +52,6 @@ public class SSOWebView {
     final String title,
     final Listener listener) {
     alreadyRedirected = false;
-    bodyRead = false;
 
     dialog = new Dialog(activity, android.R.style.Theme_Light_NoTitleBar_Fullscreen);
 
@@ -105,81 +121,30 @@ public class SSOWebView {
 
         if (isRedirect && !alreadyRedirected) {
           alreadyRedirected = true;
-          /* Biarkan WebView navigate — server akan return JSON body */
-          return false;
-        }
-        return false;
-      }
 
-      @Override
-      public void onPageFinished(WebView view, String pageUrl) {
-          super.onPageFinished(view, pageUrl);
-
-          /* Guard: hanya proses sekali setelah redirect */
-          if (bodyRead) return;
-
-          Uri    u    = Uri.parse(pageUrl);
-          String host = u.getHost();
-          String path = u.getPath();
-
-          boolean isRedirectPage =
-              host != null && host.equalsIgnoreCase(redirectHost) &&
-              path != null && path.toLowerCase()
-                  .contains(redirectPathContains.toLowerCase());
-
-          if (!isRedirectPage) return;
-
-          /* Set flag SEGERA — cegah double-fire */
-          bodyRead = true;
-
-          final String finalUrl   = pageUrl;
+          final String finalUrl   = u.toString();
           final String finalCode  = u.getQueryParameter("code")  != null
                                     ? u.getQueryParameter("code")  : "";
           final String finalState = u.getQueryParameter("state") != null
                                     ? u.getQueryParameter("state") : "";
 
-          /* Delay 150ms — beri waktu body JSON ter-render ke DOM */
-          view.postDelayed(new Runnable() {
-              @Override
-              public void run() {
-                  if (webView == null) return;
-                  webView.evaluateJavascript(
-                      "(function(){" +
-                      "  var t = document.body" +
-                      "    ? (document.body.innerText || document.body.textContent || '')" +
-                      "    : '';" +
-                      "  return t.trim();" +
-                      "})()",
-                      value -> {
-                          String body = value;
-                          if (body != null) {
-                              if (body.startsWith("\"") && body.endsWith("\""))
-                                  body = body.substring(1, body.length() - 1);
-                              body = body.replace("\\\"", "\"")
-                                        .replace("\\n",  "\n")
-                                        .replace("\\r",  "")
-                                        .replace("\\/",  "/");
-                          }
-
-                          final String finalBody = (body != null) ? body : "";
-                          android.util.Log.d("SSOWebView",
-                              "body len=" + finalBody.length() +
-                              " preview=" + finalBody.substring(
-                                  0, Math.min(120, finalBody.length())));
-
-                          activity.runOnUiThread(() -> SSOWebView.this.dismiss());
-
-                          if (listener != null)
-                              listener.onRedirectIntercepted(
-                                  finalUrl, finalCode, finalState, finalBody);
-                      }
-                  );
-              }
-          }, 150);
-      }
-
-      private void dismiss() {
-        SSOWebView.this.dismiss();
+          /*
+           * PENTING: BATALKAN navigasi (return true), jangan biarkan WebView
+           * merender URL ini. Endpoint redirect mengembalikan JSON, bukan
+           * HTML — jika WebView mencoba menampilkannya sebagai halaman, hasil
+           * yang didapat adalah halaman error native "Webpage not available",
+           * bukan body JSON, sehingga JSON.parse di sisi JS selalu gagal.
+           *
+           * Sebagai gantinya, ambil body via HTTP request native di background
+           * thread — pola yang sama seperti fetchJsonFromUrl() pada
+           * LoginIdamActivity, yang sudah terbukti bekerja untuk flow login
+           * berbasis WebView redirect lainnya di aplikasi ini.
+           */
+          dismiss();
+          fetchRedirectBody(finalUrl, finalCode, finalState, listener);
+          return true;
+        }
+        return false;
       }
     });
 
@@ -197,6 +162,64 @@ public class SSOWebView {
     dialog.show();
 
     webView.loadUrl(url);
+  }
+
+  private void fetchRedirectBody(
+      final String url,
+      final String code,
+      final String state,
+      final Listener listener) {
+
+    EXECUTOR.execute(() -> {
+      String body;
+      HttpURLConnection conn = null;
+      try {
+        conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(20000);
+        conn.setReadTimeout(20000);
+        conn.setRequestProperty("Accept", "application/json");
+
+        int status = conn.getResponseCode();
+        InputStream is = (status >= 200 && status < 400)
+            ? conn.getInputStream() : conn.getErrorStream();
+        body = readStream(is);
+
+        Log.d(TAG, "fetchRedirectBody status=" + status + " len=" + body.length());
+      } catch (Exception e) {
+        Log.e(TAG, "fetchRedirectBody failed", e);
+        /*
+         * Bungkus error sebagai JSON agar konsumen JS (yang selalu mem-parse
+         * body sebagai JSON dan memeriksa `status`) mendapat pesan yang jelas,
+         * alih-alih body kosong atau string mentah yang gagal di-parse.
+         */
+        body = "{\"status\":0,\"status_message\":\"" + escapeJson(e.getMessage()) + "\"}";
+      } finally {
+        if (conn != null) conn.disconnect();
+      }
+
+      final String finalBody = body;
+      new Handler(Looper.getMainLooper()).post(() -> {
+        if (listener != null) {
+          listener.onRedirectIntercepted(url, code, state, finalBody);
+        }
+      });
+    });
+  }
+
+  private static String readStream(InputStream is) throws IOException {
+    if (is == null) return "";
+    StringBuilder sb = new StringBuilder();
+    try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = br.readLine()) != null) sb.append(line);
+    }
+    return sb.toString();
+  }
+
+  private static String escapeJson(String s) {
+    if (s == null) return "Unknown network error";
+    return s.replace("\\", "\\\\").replace("\"", "\\\"");
   }
 
   public void dismiss() {
